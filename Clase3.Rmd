@@ -1,0 +1,219 @@
+---
+title: "Ejercicios Logistica Binaria 1"
+author: "Salvador Enrique Rodríguez Hernández"
+date: "22/06/2025"
+---
+
+1. Carga los datos en el entorno de Rstudio a través de la función readRDS. Haz un summary de los datos para entender bien qué significan y verificar que las variables no tengan errores.
+
+```{r message=FALSE,warning=FALSE}
+library(caret)
+library(pROC)
+library(car)
+library(purrr)
+library(furrr)
+library(dplyr)
+library(glmnet)
+# Para paralelizar
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+datos<-readRDS("DatosGSS")
+str(datos)
+```
+
+2. Revisa los niveles que toma la variable dependiente y haz las modificaciones necesarias.
+```{r}
+datos$Hijos<-as.factor(make.names(datos$Hijos))
+table(datos$Hijos)/nrow(datos)
+```
+
+3. Haz una partición entrenamiento-prueba de los datos.
+```{r}
+set.seed(12345)
+trainIndex <- createDataPartition(datos$Hijos, p=0.8, list=FALSE)
+data_train <- datos[trainIndex,]
+data_test <- datos[-trainIndex,]
+```
+
+4. Genera un primer modelo de regresión logística binario para la variable “Hijos” con todas las variables independientes disponibles y los datos de entrenamiento. ¿Cuántos parámetros tiene el modelo? ¿Todos los parámetros son significativos al 5%? Indica cuáles no lo son.
+```{r}
+modeloInicial<-glm(Hijos~., data=data_train, family=binomial)
+modeloInicial$rank
+summary(modeloInicial)
+```
+
+5. Con la información del modelo, responde a las siguientes preguntas justificando la respuesta: 
+a. ¿El tamaño del municipio en el que reside el encuestado influye en el hecho de que tenga hijos?
+El valor p es mayor que 0.05, por lo tanto, no hay evidencia estadística suficiente para afirmar que el tamaño del municipio influye significativamente en la probabilidad de tener hijos. Aunque el coeficiente es negativo (lo que sugiere que a mayor tamaño del municipio, menor probabilidad de tener hijos), esta asociación no es estadísticamente significativa.
+
+b. ¿Se puede afirmar que los encuestados independientes tienen la misma tendencia a tener hijos que los demócratas?
+El valor p es menor que 0.05, por lo tanto, sí hay evidencia estadística de que los encuestados independientes tienen una tendencia significativamente distinta a la de los demócratas en cuanto a la probabilidad de tener hijos. El coeficiente positivo indica que los independientes tienen una mayor probabilidad de tener hijos que los demócratas, todo lo demás constante.
+
+c. ¿Se puede afirmar que los encuestados republicanos tienen la misma tendencia a tener hijos que los demócratas?
+El valor p también es menor que 0.05, por lo tanto, sí se puede afirmar que hay una diferencia significativa entre republicanos y demócratas respecto a la probabilidad de tener hijos. El coeficiente positivo indica que los republicanos tienen una mayor probabilidad de tener hijos que los demócratas, en condiciones similares.
+
+d. ¿La felicidad de los encuestados influye en el hecho de que tengan hijos?
+Los valores p de las variables FelicidadPretty happy y FelicidadVery happy son mayores que 0.05, lo cual indica que la felicidad, en sus distintas categorías, no influye significativamente en la probabilidad de tener hijos. Aunque los coeficientes son positivos (sugiriendo mayor probabilidad de tener hijos en personas más felices), la evidencia no es suficiente para concluir un efecto estadísticamente significativo.
+
+e. ¿El género de los encuestados influye en el hecho de que tengan hijos?
+El valor p es mucho menor que 0.05, por lo que el género influye significativamente en la probabilidad de tener hijos. El coeficiente negativo indica que los hombres tienen menor probabilidad de tener hijos que las mujeres, manteniendo constante el resto de variables.
+
+6. Aplica el análisis de tipo II sobre el modelo anterior, explica en qué consiste este análisis y de qué sirve. A continuación, analiza los resultados y extrae las conclusiones pertinentes.
+
+```{r}
+Anova(modeloInicial, type = "II")
+``` 
+El análisis de tipo II en un modelo de regresión logística evalúa la importancia individual de cada variable explicativa, controlando por el efecto de todas las demás. Es decir, cada variable se evalúa comparando el modelo completo con otro modelo donde únicamente se elimina esa variable, manteniendo el resto. Se utiliza el test de razón de verosimilitudes para determinar si la exclusión de dicha variable reduce significativamente la calidad del modelo. Este tipo de análisis es útil para identificar qué variables tienen un efecto global significativo en la variable dependiente (en este caso, tener o no hijos), y permite detectar variables irrelevantes que podrían eliminarse sin afectar el ajuste del modelo.
+
+El análisis de tipo II permite concluir que las variables estado civil, edad, género, raza, empleo y clase social son las más relevantes para explicar si una persona tiene hijos. Por otro lado, variables como felicidad, ingreso, tamaño del municipio y signo zodiacal no parecen tener un impacto significativo en este contexto. Esta información puede utilizarse para simplificar el modelo manteniendo únicamente las variables con mayor poder explicativo.
+
+7. Construye un nuevo modelo (que llamaremos modelo2) que contenga únicamente las 3 variables
+más importantes (usa la información del ejercicio anterior para saber cuáles son). ¿Cuántos
+parámetros tiene? ¿Este nuevo modelo tiene todos sus parámetros significativos?
+
+```{r}
+modelo2<-glm(Hijos~Genero+Edad+EstadoCivil,
+             data=data_train, family=binomial)
+modelo2$rank
+summary(modelo2)
+```
+Las variables seleccionadas para el modelo reducido (EstadoCivil, Edad y Genero) fueron aquellas que presentaron los valores más altos del estadístico LR Chi-squared en el análisis de tipo II, lo que indica que su contribución a la explicación de la variable dependiente es la más relevante dentro del modelo completo. Además, estas variables resultaron altamente significativas (valores p < 0.001) y representan factores clave desde una perspectiva demográfica. La elección también consideró la parsimonia y la interpretabilidad del modelo, priorizando Genero frente a otras variables significativas como Raza, debido a su menor número de parámetros y su utilidad práctica. 
+
+El modelo reducido modelo2, construido con las variables Genero, Edad y EstadoCivil, contiene 5 parámetros en total: dos asociados a EstadoCivil (al tener tres niveles), uno para Genero, uno para Edad y uno para el intercepto. Al revisar la salida del modelo, se observa que todos los parámetros son estadísticamente significativos, excepto el correspondiente a EstadoCivilDiv/Sep/viudo, que tiene un valor p de 0.5649, muy por encima del umbral convencional de 0.05. Por lo tanto, no todos los parámetros del modelo son significativos.
+
+
+8. Obtén los ODDS-ratio e interprétalos (haz una frase completa para cada uno de ellos que pudiera comprender alguien con escasos conocimientos de estadística). Recuerda que si algún parámetro no es significativo la frase correspondiente debe reflejar ese hecho.
+```{r}
+exp(coef(modelo2))
+
+```
+GeneroMale: El odds-ratio es 0.48, lo que significa que los hombres tienen una probabilidad 52% menor de tener hijos en comparación con las mujeres, manteniendo constantes el estado civil y la edad. Esta diferencia es estadísticamente significativa.
+
+Edad: El odds-ratio es 1.03, lo que implica que por cada año adicional de edad, la probabilidad de tener hijos aumenta en un 3%, suponiendo que el género y el estado civil permanecen constantes. Este efecto es estadísticamente significativo.
+
+EstadoCivilDiv/Sep/viudo: El odds-ratio es 0.90, lo que sugiere que las personas divorciadas, separadas o viudas tienen una probabilidad del 0.1 menos de tener hijos que las casadas (categoría de referencia). Sin embargo, esta diferencia no es estadísticamente significativa, por lo que no se puede afirmar que exista un efecto real.
+
+EstadoCivilSoltero: El odds-ratio es 0.15, lo que indica que las personas solteras tienen una probabilidad 85% menor de tener hijos en comparación con las casadas. Esta diferencia es estadísticamente significativa.
+
+
+9. Utilizando los datos de la partición de entrenamiento,
+a. Obtén la matriz de confusión para el punto de corte de 0.5, así como la tasa de acierto, el índice Kappa, la sensibilidad y la especificidad y explica qué significan.
+
+```{r}
+probs <-predict(modelo2, data_train, type="response")
+cm<-confusionMatrix(data=as.factor(ifelse(probs>=0.5,"X1","X0")),
+                    reference=data_train$Hijos, positive="X1")
+cm$table
+cm$overall[1:2]
+cm$byClass[1:2]
+```
+Tasa de acierto (Accuracy): 0.7987
+Esto significa que el modelo logra clasificar correctamente aproximadamente el 79.87% de los casos en el conjunto de entrenamiento.
+
+Índice Kappa: 0.4831
+Este valor mide la calidad del modelo ajustando por la posibilidad de aciertos por azar. Un Kappa de 0.48 indica una concordancia moderada, por lo que el modelo tiene una calidad aceptable, aunque no excelente.
+
+Sensibilidad: 0.8800
+Esta métrica indica que el 88% de los casos positivos reales (personas con hijos) fueron correctamente identificados por el modelo como positivos. Es decir, el modelo tiene alta capacidad para detectar eventos.
+
+Especificidad: 0.5881
+La especificidad muestra que el modelo logra identificar correctamente solo el 58.8% de los casos negativos (personas sin hijos), lo que indica una capacidad más limitada para identificar correctamente a quienes no tienen hijos.
+
+El modelo muestra un buen desempeño general, especialmente para identificar a quienes tienen hijos (alta sensibilidad), aunque es menos preciso al identificar a quienes no los tienen (menor especificidad). La tasa de acierto es cercana al 80% y el índice Kappa sugiere una calidad moderada del clasificador.
+
+
+b. Si modificamos el punto de corte por la proporción de eventos (codificados como X1) que hay en los datos, ¿cómo se modifican las medidas del apartado anterior? ¿Tiene sentido?
+
+```{r}
+cm2<-confusionMatrix(data=as.factor(ifelse(probs>=0.73,"X1","X0")),
+                   reference=data_train$Hijos, positive="X1")
+cm2$table
+cm2$overall[1:2]
+cm2$byClass[1:2]
+```
+Al ajustar el punto de corte a la proporción real de eventos, mejoró la especificidad, es decir, el modelo clasificó mejor a quienes no tienen hijos, reduciendo falsos positivos. Por otro lado, la sensibilidad disminuyó, lo que indica que se identificaron menos casos positivos correctamente. El índice Kappa y la tasa de acierto se mantuvieron similares en general, lo que muestra que el cambio no afectó negativamente el desempeño global del modelo. Por lo tanto, el cambio sí tiene sentido, especialmente en contextos donde la variable dependiente está desbalanceada. Ajustar el punto de corte a la proporción de eventos ayuda a lograr un mejor equilibrio entre sensibilidad y especificidad, lo cual es útil cuando es importante identificar correctamente ambas clases (por ejemplo, no solo predecir quién tiene hijos, sino también quién no).
+
+c. ¿Qué puedes decir sobre la calidad del modelo a partir de la información proporcionada por la curva ROC?
+```{r}
+curvaROC<-roc(data_train$Hijos, probs)
+curvaROC$auc
+plot(curvaROC)
+```
+La curva ROC generada para el modelo muestra un área bajo la curva (AUC) de 0.8148, lo que indica que el modelo posee una buena capacidad para discriminar entre personas que tienen hijos (X1) y las que no (X0). Un AUC superior a 0.8 suele considerarse un indicador de modelo de calidad aceptable o buena, ya que significa que en aproximadamente el 81% de los casos, el modelo asigna una probabilidad más alta al caso positivo que al negativo. Por tanto, se concluye que el modelo tiene un desempeño sólido desde el punto de vista predictivo.
+
+
+
+10. Repite el ejercicio anterior utilizando los datos de la partición de prueba, haciendo hincapié en la comparación con los resultados anteriores.
+
+```{r}
+probs <-predict(modelo2, data_test, type="response")
+cm<-confusionMatrix(data=as.factor(ifelse(probs>=0.5,"X1","X0")),
+                    reference=data_test$Hijos, positive="X1")
+cm$table
+cm$overall[1:2]
+cm$byClass[1:2]
+
+```
+
+```{r}
+cm2<-confusionMatrix(data=as.factor(ifelse(probs>=0.73,"X1","X0")),
+                   reference=data_test$Hijos, positive="X1")
+cm2$table
+cm2$overall[1:2]
+cm2$byClass[1:2]
+
+```
+
+
+```{r}
+curvaROC<-roc(data_test$Hijos, probs)
+curvaROC$auc
+plot(curvaROC)
+
+```
+
+
+Al aplicar el modelo modelo2 sobre los datos de prueba (data_test) y evaluarlo con un punto de corte de 0.5, se obtuvo lo siguiente:
+
+Accuracy: 0.7931
+
+Kappa: 0.4706
+
+Sensibilidad: 0.8737
+
+Especificidad: 0.5841
+
+Cuando se modificó el punto de corte a 0.73 (la proporción de eventos en los datos de entrenamiento), los resultados cambiaron de esta manera:
+
+Accuracy: 0.7734
+
+Kappa: 0.4678
+
+Sensibilidad: 0.8055
+
+Especificidad: 0.6903
+
+Por último, la evaluación con la curva ROC generada sobre los datos de prueba arrojó un valor de AUC = 0.7931, lo cual indica una capacidad de discriminación aceptable del modelo, aunque algo inferior al desempeño observado en los datos de entrenamiento (donde el AUC era 0.8148).
+
+
+En comparativa con el conjunto de entrenamiento se tiene que:
+
+El modelo mantiene una precisión (accuracy) similar entre entrenamiento (≈ 0.7987) y prueba (≈ 0.7931).
+
+El índice Kappa también es consistente, alrededor de 0.47–0.48, indicando un rendimiento moderado y estable.
+
+Sensibilidad en prueba (0.8737) es ligeramente inferior a la del entrenamiento (0.88), mientras que la especificidad mejora un poco tras modificar el punto de corte.
+
+El valor de AUC se redujo de 0.8148 a 0.7931, lo que es normal al pasar de entrenamiento a prueba, pero sigue indicando que el modelo generaliza razonablemente bien.
+
+11. En líneas generales, ¿qué puedes comentar de la calidad del modelo y de su estabilidad? Nota: no necesitas ejecutar más código para responder esta pregunta.
+
+El modelo presenta un rendimiento estable al aplicarse a nuevos datos (conjunto de prueba), sin pérdidas drásticas de precisión ni capacidad de discriminación. La ligera variación en métricas confirma que el modelo tiene una buena capacidad de generalización y que el ajuste realizado en el entrenamiento no fue producto de sobreajuste (overfitting).
+
+
+
+
+
+
+

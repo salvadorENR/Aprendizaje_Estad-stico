@@ -1,0 +1,317 @@
+---
+title: "Ejercicio Lineal 2"
+author: "Salvador Enrique Rodríguez Hernández"
+date: "22/06/2025"
+---
+
+1. Carga los datos en el entorno de Rstudio a través de la función readRDS. Utilizando el código que consideres (y los datos disponibles), indica qué precio estimarías que tiene una vivienda. A continuación, obtén el histograma de la variable dependiente y comenta el gráfico.
+```{r warning=FALSE,message=FALSE,results=FALSE}
+library(car)
+library(purrr)
+library(furrr)
+library(dplyr)
+library(ggplot2)
+library(glmnet)
+library(caret)
+# Para paralelizar
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+datos<-readRDS("VentaViviendas")
+str(datos)
+summary(datos)
+```
+```{r}
+hist(datos$price)
+```
+
+Según el resumen estadístico, el precio promedio de una vivienda es de $544,129, mientras que el valor mediano es de $451,000. Estos valores permiten tener una idea general del costo típico de una vivienda en el conjunto de datos. Por tanto, si se desea hacer una estimación razonable del precio de una vivienda promedio, se podría proponer un precio cercano al valor mediano (por ser más robusto frente a valores extremos), es decir, aproximadamente $451,000.
+
+El histograma de price muestra una distribución asimétrica positiva, con la mayoría de los precios concentrados en los rangos más bajos (entre $100,000 y $800,000) y una larga cola hacia la derecha, lo que indica la presencia de algunas viviendas con precios muy altos que funcionan como valores atípicos (outliers). Esto justifica que el valor medio ($544,129) sea mayor que la mediana ($451,000), y refuerza la elección de la mediana como mejor estimador del precio típico.
+
+2.Realiza una partición del conjunto de datos en entrenamiento (80%) y prueba (20%). Explica a continuación de qué sirve esta partición.
+```{r}
+set.seed(12345)
+trainIndex <- createDataPartition(datos$price, p=0.8, list=FALSE)
+data_train <- datos[trainIndex,]
+data_test <- datos[-trainIndex,]
+```
+
+La partición en conjuntos de entrenamiento y prueba sirve para evaluar la capacidad de generalización de un modelo predictivo. El conjunto de entrenamiento se utiliza para construir y ajustar el modelo, mientras que el conjunto de prueba permite verificar su desempeño sobre datos no utilizados durante el entrenamiento. Esta estrategia ayuda a detectar problemas como el sobreajuste y asegura que el modelo sea útil al aplicarse a nuevos datos reales.
+
+
+3. A continuación, aplica las 6 combinaciones de selección de variables automática (forward, stepwise y backward junto con los criterios AIC yBIC). ¿Cuántos modelos diferentes se generan? ¿Cuántos parámetros tienen? ¿A qué se deben las diferencias observadas (sobre todo entre los modelos generados con AIC y los generados con BIC)?
+
+```{r}
+null<-lm(price~1, data=data_train)
+full<-lm(price~., data=data_train)
+```
+
+```{r}
+modeloStepBIC<-step(null, scope=list(lower=null, upper=full), direction="both",
+                    k=log(nrow(data_train)),trace=F)
+modeloStepAIC<-step(null, scope=list(lower=null, upper=full), direction="both",
+                    k=2, trace=F)
+modeloForwBIC<-step(null, scope=list(lower=null, upper=full), direction="forward",
+                    k=log(nrow(data_train)),trace=F)
+modeloForwAIC<-step(null, scope=list(lower=null, upper=full), direction="forward",
+                    k=2, trace=F)
+modeloBackBIC<-step(full, scope=list(lower=null, upper=full), direction="backward",
+                    k=log(nrow(data_train)),trace=F)
+modeloBackAIC<-step(full, scope=list(lower=null, upper=full), direction="backward",
+                    k=2, trace=F)
+```
+
+```{r}
+modelos<-list(modeloStepBIC,modeloStepAIC,modeloForwBIC,modeloForwAIC,modeloBackBIC,
+              modeloBackAIC)
+map(modelos,function(x) formula(x)) 
+map_int(modelos,function(x) x$rank)
+
+```
+
+Se generan 6 modelos: 
+
+Modelos [1] y [3] son idénticos, mismo conjunto de variables con BIC.
+
+Modelos [2] y [4] son idénticos, mismo conjunto de variables con AIC.
+
+Modelo [5] (BIC) es ligeramente distinto a [1]/[3]: tiene mismas variables pero diferente orden, lo que no afecta al modelo en términos de estructura.
+
+Modelo [6] (AIC) es idéntico a [2]/[4], solo cambia el orden.
+
+Por tanto, hay solamente 2 modelos diferentes en cuanto a variables seleccionadas:
+
+El modelo generado por BIC (con 8 variables, sin condition)
+
+El modelo generado por AIC (con 9 variables, incluyendo condition)
+
+Independientemente del procedimiento de selección (forward, backward o stepwise), el conjunto de variables seleccionadas depende principalmente del criterio de penalización utilizado (AIC o BIC). Esto ocurre porque los algoritmos recorren el espacio de modelos posibles, pero la decisión final está determinada por el valor del criterio de ajuste. En este caso, BIC es más estricto al penalizar modelos complejos, y por ello selecciona modelos más simples que los generados por AIC. 
+
+4. Para determinar qué modelo es mejor para estos datos, aplica validación cruzada sobre los modelos diferentes del apartado 3. Determina qué modelo es preferible teniendo en cuenta el R2, la estabilidad y el número de parámetros.
+
+```{r}
+modelos<-list(modeloStepBIC, modeloStepAIC)
+vcrTodosModelos<-list()
+for (i in 1:length(modelos)){
+  set.seed(12345)
+  vcr<-train(formula(modelos[[i]]), data = data_train,
+           method = "lm", 
+           trControl = trainControl(method="repeatedcv", number=5, repeats=20)
+)
+  vcrTodosModelos[[i]]<-vcr
+}
+names(vcrTodosModelos)<-paste0("Model",1:length(modelos), "_",sapply(modelos,function(x) x$rank))
+bwplot(resamples(vcrTodosModelos),metric=c("Rsquared"))
+```
+Aunque el modelo generado con AIC logra un ajuste marginalmente mejor, la diferencia es poco significativa y no justifica la inclusión de más variables si se busca un modelo más simple. Por tanto, el modelo generado con BIC (Model1_8) puede considerarse preferible, ya que ofrece un rendimiento similar en términos de $R^2$, con mayor parsimonia (menos parámetros) y similar estabilidad.
+
+5. Para el modelo “ganador”, obtén la estimación del $R^2$ en entrenamiento y prueba, la importancia de las variables y los coeficientes del modelo. Comenta las salidas obtenidas, sin olvidar indicar algo sobre la influencia de las variables input en la objetivo.
+
+```{r}
+R2(predict(modeloStepBIC,data_train), data_train$price)
+R2(predict(modeloStepBIC,data_test), data_test$price)
+```
+
+```{r}
+Anova(modeloStepBIC,type = "II")
+```
+
+```{r}
+summary(modeloStepBIC)
+```
+
+
+El modelo seleccionado mediante el criterio BIC logra un buen nivel de ajuste, con un $R^2$ de aproximadamente 0.62 tanto en los datos de entrenamiento como en los de prueba, lo que evidencia estabilidad y capacidad de generalización. Además, todas las variables incluidas en el modelo resultaron ser estadísticamente significativas.
+
+La variable con mayor influencia en el precio de venta de la vivienda es la superficie interior (superf), medida en metros cuadrados, seguida por las variables relacionadas con la ubicación (lat, latitud geográfica) y unas buenas vistas (view).
+En términos concretos:
+
+Por cada metro cuadrado adicional del interior de la vivienda, el precio estimado se incrementa en aproximadamente $3,027, lo que refleja el peso que tiene el tamaño sobre el valor total.
+
+Un incremento en la latitud geográfica (es decir, una ubicación más al norte) está asociado con un aumento de $6,067 en el precio, lo que puede interpretarse como una mayor valorización en ciertas zonas.
+
+Las viviendas que cuentan con buenas vistas (view = 1) tienen un precio estimado $19,424 más alto que aquellas que no las tienen, lo cual pone en evidencia el impacto de este atributo visual en el mercado.
+
+
+
+6. Representa en varios diagramas de dispersión la variable objetivo frente a las input numéricas para comparar la forma real de su relación y cómo se ha plasmado en el modelo de regresión lineal. Comenta los resultados.
+
+```{r}
+library(ggplot2)
+library(mgcv)
+
+ggplot(datos,aes(x=superf , y=price)) +
+  geom_point(shape = ".") +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs", k=7), se=FALSE) +
+  geom_smooth(method = "lm", se=FALSE, color = "red")
+
+
+
+ggplot(datos,aes(x=lat , y=price)) +
+  geom_point(shape = ".") +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs", k=7), se=FALSE) +
+  geom_smooth(method = "lm", se=FALSE, color = "red")
+
+
+ggplot(datos,aes(x=view, y=price)) +
+  geom_point(shape = ".") +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs", k=7), se=FALSE) +
+  geom_smooth(method = "lm", se=FALSE, color = "red")
+
+```
+Los diagramas de dispersión permiten visualizar que, si bien las relaciones entre price y las variables superf y view son coherentes con el modelo lineal, la variable lat presenta un comportamiento no lineal, y superf también podría beneficiarse de una transformación para reflejar mejor la aceleración del crecimiento en precios. Esto sugiere que, aunque el modelo lineal ofrece una buena aproximación, existe margen para mejorar la especificación del modelo incorporando relaciones no lineales o transformaciones sobre las variables más influyentes.
+
+7. Discretiza las variables cuantitativas input, construye los correspondientes modelos stepwise BIC y AIC y compara estos modelos con el “ganador” del apartado 4 a través de validación cruzada repetida. Determina si la discretización es recomendable en este caso y, de ser así, analiza el modelo final (estimación del $R^2$ en entrenamiento y prueba, la importancia de las variables y los coeficientes del modelo).
+
+```{r}
+data_train_disc<-data_train
+data_test_disc<-data_test
+
+vars_to_bin <- names(Filter(is.numeric, datos[, -which(names(datos) == "price")])) 
+nbins <- 7 # Se puede cambiar a valores entre 4 y 10
+for (var in vars_to_bin) {
+  breaks <- unique(quantile(data_train_disc[[var]], probs = seq(0, 1, length.out = nbins + 1)))
+  data_train_disc[[paste0(var,"_disc")]] <- cut(data_train_disc[[var]], breaks = breaks, include.lowest = TRUE, right = FALSE)
+  data_test_disc[[paste0(var,"_disc")]]  <- cut(data_test_disc[[var]],  breaks = breaks, include.lowest = TRUE, right = FALSE)
+}
+summary(data_test_disc)
+```
+```{r}
+null_disc<-lm(price~1,data=data_train_disc)
+full_disc<-lm(price~.,data=data_train_disc)
+modeloStepBIC_disc<-step(null_disc, scope=list(lower=null_disc, upper=full_disc), direction="both",
+                    k=log(nrow(data_train_disc)), trace=F)
+modeloStepAIC_disc<-step(null_disc, scope=list(lower=null_disc, upper=full_disc), direction="both",
+                    k=2, trace=F)
+modelos<-list(modeloStepBIC_disc,modeloStepAIC_disc)
+map(modelos,function(x) formula(x)) 
+map_int(modelos,function(x) x$rank)
+```
+```{r}
+modelos<-list(modeloStepBIC, modeloStepBIC_disc, modeloStepAIC_disc)
+vcrTodosModelos<-list()
+for (i in 1:length(modelos)){
+  set.seed(12345)
+  vcr<-train(formula(modelos[[i]]), data = data_train_disc,
+           method = "lm",
+           trControl = trainControl(method="repeatedcv", number=5, repeats=20)
+)
+  vcrTodosModelos[[i]]<-vcr
+}
+names(vcrTodosModelos)<-paste0("Model",1:length(modelos), "_",sapply(modelos,function(x) x$rank))
+bwplot(resamples(vcrTodosModelos), metric=c("Rsquared"))
+```
+```{r}
+R2(predict(modeloStepBIC_disc,data_train_disc), data_train_disc$price)
+R2(predict(modeloStepBIC_disc,na.omit(data_test_disc)), na.omit(data_test_disc)$price)
+```
+```{r warning=FALSE}
+Anova(modeloStepBIC_disc,type = "II")
+summary(modeloStepBIC_disc)
+```
+Al discretizar las variables cuantitativas input mediante cuantiles y construir los modelos stepwise con BIC y AIC, se observa que ambos modelos superan al modelo "ganador" del apartado 4 en términos de $R^2$ obtenido mediante validación cruzada repetida, siendo el modelo BIC discretizado el más recomendable por su mejor equilibrio entre rendimiento y parsimonia (menor número de variables con un $R^2$ aceptable y estabilidad aceptable). Por tanto, la discretización resulta útil en este caso, ya que permite capturar relaciones no lineales relevantes como las observadas en las variables superf y lat, mejorando el ajuste global sin generar sobreajuste. En particular, la discretización de superf permite evidenciar que los tramos superiores aportan incrementos cada vez menores al precio, reflejando rendimientos decrecientes, mientras que lat_disc destaca zonas geográficas específicas con precios considerablemente más altos, especialmente en ubicaciones más al norte, efecto que no se percibiría con una relación lineal. El modelo final presenta un $R^2$ de entrenamiento de 0.7536 y de prueba de 0.6898, lo que evidencia un nivel adecuado de estabilidad. Según el análisis ANOVA tipo II, las variables con mayor importancia explicativa son superf, lat_disc, superf_disc y view, con valores F elevados y significancia menor a 0.001. Finalmente, los coeficientes estimados son coherentes con las tendencias esperadas: por ejemplo, la superficie tiene un efecto lineal positivo, mientras que los tramos superiores de superf_disc presentan coeficientes negativos crecientes que reflejan rendimientos decrecientes, y los intervalos de lat_disc muestran incrementos significativos en zonas geográficas específicas, consistentes con los patrones observados en los gráficos de dispersión.
+
+8.Utilizando los datos de la partición de entrenamiento, realiza las modificaciones precisas para poder construir modelos penalizados con R. Explica por qué es necesario llevar a cabo este paso y en qué consiste.
+
+```{r}
+y <- data_train$price
+x<-model.matrix(price~., data=data_train)[,-1]
+```
+
+Para construir modelos penalizados, es necesario realizar una transformación previa de los datos de entrenamiento utilizando la función `model.matrix()`. Esta transformación convierte el conjunto de predictores en una matriz numérica adecuada, donde las variables categóricas se codifican mediante variables indicadoras (dummies). Este paso es indispensable porque la función encargada de ajustar estos modelos no realiza internamente la conversión de variables categóricas, a diferencia de otras funciones como `lm()`. Además, al separar explícitamente la variable dependiente de las explicativas, se garantiza que el modelo reciba solo los predictores como entrada. Cabe destacar que no es necesario estandarizar manualmente las variables numéricas, ya que la función utilizada lo hace automáticamente. En conjunto, estas modificaciones aseguran que el procedimiento de penalización se aplique correctamente sobre los coeficientes y que el modelo sea válido y funcional.
+
+
+9. Construye un modelo LASSO con todos los valores posibles de λ y representa gráficamente los resultados (si copias el código facilitado, cuidado con el ylim). Comenta lo que observes y, basándote en dicha información, explica los fundamentos del modelo.
+
+```{r}
+modeloLASSO<-glmnet(x, y, alpha = 1, family = "gaussian")
+plot(modeloLASSO, xvar="lambda", main = "LASSO")
+```
+
+En la gráfica se representa la evolución de los coeficientes del modelo LASSO a lo largo de una secuencia de valores de penalización $\lambda$, en escala logarítmica inversa sobre el eje horizontal. Cada curva muestra cómo varía un coeficiente asociado a una variable predictora del modelo. Se observa que, para valores pequeños de $\lambda$ (hacia la izquierda del eje), los coeficientes tienen mayor libertad y toman valores alejados de cero. A medida que aumenta $\lambda$ (movimiento hacia la derecha), la penalización se intensifica y provoca una contracción progresiva de los coeficientes hacia cero.
+
+En esta gráfica en particular se puede notar que sólo unas pocas variables tienen coeficientes grandes al inicio, y que estas son las últimas en desaparecer conforme crece la penalización. La mayoría de los coeficientes son relativamente pequeños desde el principio y rápidamente se reducen a cero cuando $\lambda$ supera cierto umbral, lo que refleja su baja relevancia en la predicción del modelo.
+
+Este comportamiento evidencia el principio fundamental del LASSO: la penalización $L_1$ permite reducir algunos coeficientes exactamente a cero, realizando así una selección automática de variables. Esta propiedad lo convierte en una herramienta útil para mejorar la interpretabilidad del modelo y controlar el sobreajuste, especialmente en situaciones con alta dimensión o colinealidad. La gráfica demuestra que, conforme se incrementa $\lambda$, el modelo va descartando gradualmente variables, reteniendo solo aquellas con mayor capacidad explicativa. Por tanto, el LASSO actúa simultáneamente como método de regularización y selección de características.
+
+
+10. Para determinar el modelo penalizado óptimo, aplica validación cruzada en una combinación amplia de α y λ y representa gráficamente los resultados. Indica qué significa la línea horizontal que se añade en el gráfico y comenta los resultados que observas. Determina la combinación de parámetros óptima según la regla 1se.
+
+```{r}
+future::plan(multisession, workers=detectCores() - 1)
+alphas<-seq(0,1,by=0.1)
+
+set.seed(12345)
+tunningEnet<- future_map(alphas, 
+                         function(a) cv.glmnet(x,y,nfolds=5,family = "gaussian", alpha=a),
+                         .options = furrr_options(seed = T))
+
+plan(sequential)
+resultado <- map_df(1:length(alphas),
+                    function(x) {
+                      data.frame(
+                        alpha = alphas[x],
+                        lambda = tunningEnet[[x]]$lambda,
+                        numPar = tunningEnet[[x]]$nzero,
+                        error_cv = tunningEnet[[x]]$cvm,
+                        error_up = tunningEnet[[x]]$cvup,
+                        posicion = 1:length(tunningEnet[[x]]$nzero)
+                      )
+                    }
+)
+
+error_1se<- resultado |>
+  slice_min(error_cv, n=1) |> pull(error_up)
+
+ggplot(data=resultado, aes(x=posicion, y=error_cv, col=as.factor(alpha)))+
+  geom_line()+
+  geom_point() +
+  geom_hline(yintercept = error_1se)
+
+resultado |>
+  filter(error_cv<=error_1se) |> slice_min(numPar) |> arrange(desc(alpha), desc(lambda))
+```
+
+
+A partir de la validación cruzada aplicada a una amplia combinación de valores de \( \alpha \) y \( \lambda \), se ha obtenido una gráfica que muestra el error cuadrático medio (ECM) promedio para cada combinación, representado por curvas de color según el valor de \( \alpha \). En dicho gráfico, la línea horizontal negra corresponde a la regla 1SE (standard error rule), la cual marca el umbral máximo aceptable de error para considerar un modelo como competitivo respecto al mejor modelo observado (es decir, aquel con menor error medio). Esta regla permite seleccionar modelos más simples sin sacrificar demasiado rendimiento predictivo.
+
+En la gráfica se observa que, salvo para los valores más extremos de penalización (particularmente cuando \( \alpha = 0 \), correspondiente al modelo Ridge), la mayoría de los modelos convergen a niveles de error similares. La curva asociada a \( \alpha = 1 \) (modelo LASSO) alcanza muy buenos niveles de error desde posiciones intermedias (aproximadamente desde la posición 29 en adelante), donde se estabiliza por debajo del umbral definido por la regla 1SE. Según la tabla, múltiples combinaciones de parámetros logran errores menores a este umbral, pero la regla 1SE indica que debe preferirse el modelo más simple entre los que cumplen con dicha condición.
+
+De acuerdo con los resultados, la combinación óptima corresponde a \( \alpha = 1 \) y \( \lambda \approx 20025.97 \), que genera un modelo con solo 7 parámetros no nulos y un ECM promedio de aproximadamente \( 5.57 $\times$ $10^{10}$ \), dentro del margen permitido por la regla 1SE. Esta elección implica un modelo altamente regularizado que conserva únicamente las variables con mayor capacidad explicativa, favoreciendo la interpretabilidad sin deteriorar el desempeño predictivo. Por tanto, este modelo se considera el óptimo según la estrategia establecida, combinando precisión, simplicidad y robustez.
+
+
+11. Construye el modelo con los parámetros α y λ óptimos. Obtén los parámetros beta del
+modelo y comenta su efecto sobre la variable objetivo. Obtén el R2 en entrenamiento y
+prueba y comenta la calidad del modelo, así como su estabilidad.
+
+```{r}
+modeloLASSOdef<-glmnet(x,y, family = "gaussian", alpha = 1, lambda = 20025.97)
+coef(modeloLASSOdef)
+x_test<-model.matrix(price~., data=data_test)[,-1]
+R2(predict(modeloLASSOdef, x), data_train$price)
+R2(predict(modeloLASSOdef, x_test), data_test$price)
+```
+Utilizando los valores óptimos de penalización obtenidos previamente, se construyó el modelo penalizado final. Este modelo incluye únicamente las variables cuyos coeficientes no fueron reducidos a cero por el proceso de regularización, lo cual indica que aportan valor predictivo sobre la variable dependiente price. Los parámetros beta estimados revelan que las variables superf, bathrooms, floors, view1, renovated1, lat, long y antig fueron retenidas en el modelo. El signo y magnitud de sus coeficientes permiten interpretar sus efectos:
+
+
+superf presenta un coeficiente positivo (2807.01), indicando que, manteniendo constantes las demás variables, un aumento en la superficie construida incrementa el precio esperado de la vivienda.
+
+floors también tiene coeficiente positivo, sugiriendo que un mayor número de pisos se asocia con precios más altos.
+
+view1 tiene un impacto importante sobre el precio (159811.7), lo cual confirma que una mejor vista eleva significativamente el valor de la propiedad.
+
+lat tiene un coeficiente elevado y positivo (525479.3), lo que implica que las propiedades ubicadas más al norte (mayor latitud) tienden a tener precios más altos.
+
+long posee un coeficiente negativo (-58251.6), indicando que moverse hacia el este (mayor longitud negativa) reduce el valor esperado.
+
+renovated1 y antig también contribuyen positivamente, aunque con menor magnitud.
+
+Las variables bathrooms, garden, condition2 y condition3 fueron excluidas automáticamente por el modelo, al asignarles coeficientes exactamente iguales a cero, lo cual sugiere que no aportan información relevante adicional en presencia de las variables seleccionadas.
+
+En cuanto a la calidad del modelo, el coeficiente de determinación \( $R^2$ \) alcanzó un valor de 0.6166 tanto en el conjunto de entrenamiento como en el conjunto de prueba, lo cual refleja una notable estabilidad en el desempeño predictivo del modelo. Esta similitud entre los dos valores sugiere que el modelo no está sobreajustado, es decir, ha logrado un buen equilibrio entre ajuste y generalización. Aunque el \( $R^2$ \) no es extremadamente alto, sí permite capturar una proporción razonable de la variabilidad del precio en función de las variables explicativas incluidas.
+
+
+
+
+
