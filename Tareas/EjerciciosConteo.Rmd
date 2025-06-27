@@ -1,0 +1,135 @@
+---
+title: "Poner como título los ejercicios que vayas a realizar"
+author: "Tu nombre"
+date: "La fecha"
+---
+1. Carga los datos en el entorno de Rstudio a través de la función readRDS (nota: como estás trabajando con datos “conocidos” no es necesario revisar el tipo de las variables, pues lo hiciste el primer día, pero se debe hacer siempre que el conjunto de datos es nuevo).
+
+```{r warning=FALSE,message=FALSE}
+library(caret)
+library(AER)
+library(purrr)
+library(dplyr)
+library(MASS)
+# Para paralelizar
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+```{r}
+datos<-readRDS("DatosGSS_conteo")
+str(datos)
+```
+2. En estos ejercicios vamos a trabajar sobre la variable “Hijos”. Indica de qué tipo es y obtén un gráfico apropiado para la misma. Comenta dicho gráfico.
+```{r}
+barplot(table(datos$Hijos)/nrow(datos))
+```
+3. Realiza una partición del conjunto de datos en entrenamiento (80%) y prueba (20%).
+
+```{r}
+set.seed(12345)
+trainIndex <- createDataPartition(datos$Hijos, p=0.8, list=FALSE)
+data_train <- datos[trainIndex,]
+data_test <- datos[-trainIndex,]
+```
+
+4. Utilizando los datos de la partición de entrenamiento, genera un primer modelo de regresión poisson para la variable dependiente “Hijos” con todas las variables independientes disponibles. ¿Cuántos parámetros lo componen? ¿Se podría saber si estos son significativos solo con la salida anterior?
+```{r}
+modeloInicial <- glm(Hijos ~ ., data=data_train, family=poisson)
+modeloInicial$rank #para contar el número de parámetros
+```
+No se puede saber, es necesario utilizar la función summary para saber si los parámetros son significativos. 
+
+```{r}
+summary(modeloInicial)
+```
+#Como ocurre con un gran número de funciones en R, la llamada a la función no genera ninguna salida, por lo que debemos recurrir a la función summary para poder visualizar las componentes del modelo. En la salida anterior podemos observar el valor de cada uno de los parámetros estimados (que son 15), junto con sus errores estándar y p-valores, la residual deviance y el AIC del modelo. 
+
+5. Estudia la posible existencia de sobredispersión y saca una conclusión al respecto. Explica teóricamente por qué es importante verificarlo.
+```{r}
+dispersiontest(modeloInicial)
+```
+Cómo el valor de la dispersión is significativamente mayor que 1, entonces sí hay una sobredispersión. 
+
+Es importante verificarlo porque si existe una sobredispersión es necesario ajustar un modelo binomial negativo en lugar de un modelo de Poisson. 
+
+
+6. Construye ahora un modelo de conteo Binomial negativo para la misma variable dependiente con todas las variables independientes disponibles. Comenta las diferencias teóricas que existen entre este modelo y el anterior. A continuación, utilizando la herramienta que consideres oportuna, determina cuál de los dos modelos es preferible para estos datos.
+
+```{r}
+modeloInicial_NB<-glm.nb(Hijos ~ ., data=data_train)
+summary(modeloInicial_NB) 
+```
+
+7. Aplica el análisis de tipo II sobre el tipo de modelo determinado en el apartado anterior. A continuación, analiza los resultados y extrae las conclusiones pertinentes.
+```{r}
+Anova(modeloInicial_NB, type = "II") 
+```
+En el modelo se tienen 7 variables significativas al 5%, las cuales son: ClaseSocial,Politica, Ingreso, Raza, Edad, EstadoCivil y Empleo.
+
+8. Construye un nuevo modelo (que llamaremos modelo2) que contenga únicamente las 3 variables más importantes según el análisis anterior. ¿Cuántos parámetros tiene? ¿Todas las variables del modelo son significativas ahora?
+
+```{r}
+modelo2_NB<-glm.nb(Hijos ~ EstadoCivil+Edad+Raza, data=data_train)
+modelo2_NB$rank 
+Anova(modelo2, type = "II") 
+```
+Tiene 6 parámetros
+Todas las variables son significativas
+
+9. De nuevo sobre los datos de entrenamiento, construye 2 modelos del tipo que hayas determinado en el apartado 6 aplicando uno de los métodos de selección de variables estudiados y los 2 criterios de selección a partir de la función step. ¿Los modelos son diferentes? ¿Qué variables y cuántos parámetros contienen cada uno de estos modelos? (NOTA: sólo pido que generéis dos modelos para no alargar los ejercicios, pero lo recomendable sería generar siempre los 6).
+```{r}
+null<-glm.nb(Hijos ~ 1, data=data_train)
+full<-glm.nb(Hijos ~ ., data=data_train)
+modeloStepBIC<-step(null, scope=list(lower=null, upper=full), direction="both",
+                    k=log(nrow(data_train)),trace=F)
+modeloStepAIC<-step(null, scope=list(lower=null, upper=full), direction="both",trace=F)
+map(modelos,function(x) x$call)
+map_int(modelos,function(x) x$rank)
+```
+
+Los modelos son diferentes. 
+
+10. Una vez generados los modelos (el manual con las 3 variables más importantes y los dos automáticos), debes determinar cuál es el mejor a partir de validación cruzada repetida (utiliza un bucle para simplificar esta tarea). Genera los boxplots correspondientes, así como los resúmenes y compara los modelos. ¿Cuál parece ser el mejor?
+
+```{r}
+modelos<-list(modelo2_NB,modeloStepBIC,modeloStepAIC)
+vcrTodosModelos<-list()
+coefIniModelos<-sapply(modelos,coef)
+for (i in 1:length(modelos)){
+  set.seed(1712)
+  vcr <- train (formula(modelos[[i]]), data = data_train, 
+                method = "glm.nb", start=coefIniModelos[[i]],
+                trControl = trainControl(method = "repeatedcv",
+                                         number = 5, repeats=20)
+  )
+  vcrTodosModelos[[i]]<-vcr
+}
+names(vcrTodosModelos)<-paste0("Model",1:length(modelos), "_",sapply(modelos,function(x) x$rank))
+bwplot(resamples(vcrTodosModelos), scales = list(x = list(relation = "free")),
+       metric=c("Rsquared"))
+```
+```{r}
+summary(resamples(vcrTodosModelos), metric=c("Rsquared"))
+```
+Me parece que el modelo 2 es el mejor porque tiene mejor estadísticas que el primero y su diferencia con el segundo no es mucha considerando que el tercer modelo posee muchos más parámetros a estimar(revisar si estos parámetros vienen de más variables o si pertenecen a la mismas variables). 
+
+
+
+11. Interpreta todos los parámetros del modelo “ganador” (si lo necesitas usa un nivel de significación del 5%) y, usando el código que consideres, crea un ranking de las variables explicativas por importancia.
+
+```{r}
+summary(modeloStepBIC) 
+exp(coef(modeloStepBIC))
+Anova(modeloStepBIC, type = "II")
+```
+
+12. Evalúa dicho modelo tanto en los datos de entrenamiento como en los de prueba. ¿Qué puedes decir de la calidad del modelo?
+
+```{r}
+R2(predict(modeloStepBIC,data_train,type = "response"), data_train$Hijos)
+R2(predict(modeloStepBIC,data_test,type = "response"), data_test$Hijos)
+```
+El modelo bajó de 0.26 a 0.19, lo cual puede parecer muy significativo. Posiblemente esté sobre entrenado.
+
+

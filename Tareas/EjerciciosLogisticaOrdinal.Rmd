@@ -1,0 +1,200 @@
+---
+title: "Poner como título los ejercicios que vayas a realizar"
+author: "Tu nombre"
+date: "La fecha"
+---
+1. Carga los datos en el entorno de Rstudio a través de la función readRDS (nota: como estás trabajando con datos “conocidos” no es necesario revisar el tipo de las variables, pues lo hiciste el primer día, pero se debe hacer siempre que el conjunto de datos es nuevo).
+
+```{r message=FALSE,warning=FALSE}
+ library(MASS)
+library(stargazer)
+library(caret)
+library(car)
+library(vcd)
+library(purrr)
+library(dplyr)
+library(glmnet)
+# Para paralelizar
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+```{r}
+datos<-readRDS("DatosGSS")
+str(datos)
+```
+
+2. En estos ejercicios vamos a trabajar sobre la variable ordinal “Felicidad”. Verifica que el orden de los niveles de la variable están ordenados de menor a mayor nivel de felicidad y que dicha variable está bien formateada. De no ser así, soluciona los problemas que haya.
+```{r}
+datos$Felicidad<-as.factor(make.names(datos$Felicidad))
+table(datos$Felicidad)/nrow(datos)
+```
+3. Realiza una partición del conjunto de datos en entrenamiento (80%) y prueba (20%).
+
+```{r}
+set.seed(12345)
+trainIndex <- createDataPartition(datos$Felicidad, p=0.8, list=FALSE)
+data_train <- datos[trainIndex,]
+data_test <- datos[-trainIndex,]
+```
+
+4. Utilizando los datos de la partición de entrenamiento, genera un primer modelo de regresión logística ordinal para la variable dependiente “Felicidad” con todas las variables independientes disponibles. ¿Cuántos parámetros β lo componen? ¿Cuántos son significativos al 5%?
+
+```{r}
+modeloInicial <- polr(Felicidad ~ ., data=data_train)
+modeloInicial$edf #para contar el número de parámetros
+``` 
+```{r}
+summary(modeloInicial)
+```
+
+```{r}
+stargazer(modeloInicial, type="text", report=('vc*p'))
+```
+11 significativos al 5%
+
+5. Aplica el análisis de tipo II sobre el modelo anterior, explica en qué consiste este análisis y de qué sirve. A continuación, analiza los resultados y extrae las conclusiones pertinentes.
+```{r}
+Anova(modeloInicial, type = "II")
+```
+5 variables significativas
+1. Estado civil
+2. Clase social
+3. Zodiaco
+
+6. Con la información de los ejercicios anteriores (puede que necesites ejecutar algo más de código), responde a las siguientes preguntas, justificando tu respuesta (de nuevo, usa un nivel de significación del 5%):
+a. ¿La edad de los individuos influye en su nivel de felicidad? Si es así, construye una frase que permita cuantificar esa influencia.
+No es significativo
+
+
+b. ¿La raza de los individuos influye en su nivel de felicidad? Si es así, construye una frase que permita cuantificar esa influencia.
+La Raza no influye
+
+
+
+c. ¿El género de los individuos influye en su nivel de felicidad? Si es así, construye una frase que permita cuantificar esa influencia.
+El genero sí influye. 
+Ser hombre reduce la probabilidad de ser feliz
+
+
+7. Construye un nuevo modelo (que llamaremos modelo2) que contenga únicamente aquellas variables significativas al 5%. ¿Cuántos parámetros tiene? ¿Todas las variables del modelo son significativas ahora?
+```{r}
+modelo2<-polr(Felicidad ~ ClaseSocial+Tamano+Genero+EstadoCivil+Zodiaco, data=data_train)
+modelo2$edf
+Anova(modelo2, type = "II")
+```
+8. De nuevo sobre los datos de entrenamiento, construye 2 modelos de regresión logística ordinal aplicando uno de los métodos de selección de variables estudiados y los 2 criterios de selección a partir de la función step. ¿Los modelos son diferentes? ¿Qué variables y cuántos parámetros contienen cada uno de estos modelos? (NOTA: sólo pido que generéis dos modelos para no alargar los ejercicios, pero lo recomendable sería generar los 6).
+
+```{r}
+null<-polr(Felicidad ~ 1, data=data_train)
+full<-polr(Felicidad ~ ., data=data_train)
+modeloStepBIC<-step(null, scope=list(lower=null, upper=full), direction="both",
+                    k=log(nrow(data_train)),trace=F)
+modeloStepAIC<-step(null, scope=list(lower=null, upper=full), direction="both",trace=F)
+```
+```{r}
+modelos<-list(modeloStepBIC,modeloStepAIC)
+map(modelos,function(x) x$call)
+map_int(modelos,function(x) x$edf)
+```
+9. Una vez generados los modelos (el manual con las variables significativas al 5% y los dos automáticos), debes determinar cuál es el mejor a partir de validación cruzada repetida (utiliza un bucle para simplificar esta tarea). Genera los boxplots para las 4 medidas, así como los resúmenes y compara los modelos. ¿Cuál parece ser el mejor? Recuerda que si varios modelos son parecidos en cuanto a capacidad predictiva se debe escoger el más sencillo (el que tenga menos parámetros).
+```{r}
+my_summary  <- function(data, lev = NULL, model = NULL){
+  a1 <- multiClassSummary(data, lev, model)
+  b1 <- vcd::Kappa(table(data[, "pred"],data[, "obs"]))$Weighted[1]
+  out <- c(a1, Wkappa=b1)
+  out
+}
+modelos<-list(modelo2,modeloStepBIC,modeloStepAIC)
+vcrTodosModelos<-list()
+for (i in 1:length(modelos)){
+  set.seed(1712)
+  vcr <- train (formula(modelos[[i]]),
+                data = data_train, method = "polr",
+                tuneGrid = expand.grid(method="logistic"),
+                trControl = trainControl(method = "repeatedcv",
+                                         number = 5, repeats=20,
+                                         classProbs = TRUE,
+                                         summaryFunction = my_summary)
+  )
+  vcrTodosModelos[[i]]<-vcr
+}
+```
+
+```{r}
+bwplot(resamples(vcrTodosModelos),metric=c("AUC","Kappa","Accuracy","Wkappa.value"),
+       scales = list(x = list(relation = "free")))
+```
+
+El mejor modelo es el 1, con 19 parámetros
+
+
+
+
+10. Para el mejor modelo obtén la matriz de confusión, la tasa de acierto y los índices Kappa en el conjunto de datos de prueba. ¿Qué puedes decir de la calidad del modelo? ¿Te sorprende algún resultado comparando con los resultados de validación cruzada?
+
+```{r}
+cm_test<-confusionMatrix(table(predict(modelo2,newdata=data_test),data_test$Felicidad))
+cm_test$table
+cm_test$overall[1:2]
+cm_test$byClass[,1:2]
+summary(Kappa(cm_test$table))
+```
+
+El modelo no es muy bueno porque no puede cap
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

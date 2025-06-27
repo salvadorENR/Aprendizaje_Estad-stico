@@ -1,0 +1,180 @@
+---
+title: "logística multinomial"
+author: "Salvador Enrique Rodríguez Hernández"
+date: "xx/06/2025"
+---
+
+1. Carga los datos en el entorno de Rstudio a través de la función readRDS (nota: como estás trabajando con datos “conocidos” no es necesario revisar el tipo de las variables, pues lo hiciste el primer día, pero se debe hacer siempre que el conjunto de datos es nuevo). Formatea la variable dependiente si fuera necesario. Decide si quieres modificar la categoría de referencia o no.
+
+```{r message=FALSE, warning=FALSE}
+library(nnet)
+library(stargazer)
+library(car)
+library(caret)
+library(pROC)
+library(purrr)
+library(furrr)
+library(dplyr)
+# Para paralelizar
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+```{r}
+datos<-readRDS("DatosGSS")
+str(datos)
+datos$Politica<-as.factor(make.names(datos$Politica))
+table(datos$Politica)/nrow(datos)
+```
+
+2. Realiza una partición del conjunto de datos en entrenamiento (80%) y prueba (20%).
+
+```{r}
+set.seed(12345)
+trainIndex <- createDataPartition(datos$Politica, p=0.8, list=FALSE)
+data_train <- datos[trainIndex,]
+data_test <- datos[-trainIndex,]
+```
+
+3. Utilizando los datos de la partición de entrenamiento, genera un primer modelo de regresión logística multinomial para la variable dependiente con todas las variables independientes disponibles. ¿Cuántos parámetros lo componen? ¿Cuántos son significativos al 5%?
+```{r}
+modeloInicial<-multinom(Politica ~ ., data=data_train)
+```
+```{r}
+stargazer(modeloInicial, type="text", report=('vc*p'))
+```
+23 significativos
+
+
+4. Aplica el análisis de tipo II sobre el modelo anterior, explica en qué consiste este análisis y de qué sirve. A continuación, analiza los resultados y extrae las conclusiones pertinentes.
+
+```{r}
+Anova(modeloInicial, type = "II")
+``` 
+
+5. Con la información de los ejercicios anteriores, responde a las siguientes preguntas, justificando tu respuesta (de nuevo, usa un nivel de significación del 5%):
+
+a. ¿El tamaño del municipio de residencia influye en la identificación política de los encuestados? De ser así, ¿influye de igual manera (es positivo/negativo/no influyente) en las 2 comparativas que contempla el modelo?
+
+No
+
+b. ¿La edad influye en la identificación política de los encuestados? De ser así, ¿influye de igual manera (es positivo/negativo/no influyente) en las 2 comparativas que contempla el modelo?
+
+Sí afecta. 
+
+A mayor edad la probabilidad de ser independiente es menor que la probabilidad de ser demócrata
+
+
+
+c. ¿El género influye en la identificación política de los encuestados? De ser así, ¿influye de igual manera (es positivo/negativo/no influyente) en las 2 comparativas que contempla el modelo?
+
+(1) Un hombre es más probable que sea independiente que demócrata en comparación que una mujer
+(2) un hombre es más probable que sea republicando que demócrata en comparación que una mujer
+
+
+6. Utilizando los datos de la partición de entrenamiento, construye 6 modelos de regresión logística multinomial para la variable dependiente “Politica” aplicando los 3 métodos de selección de variables estudiados y los 2 criterios de selección a partir de la función step. ¿Cuántos modelos diferentes se generan? ¿Cuántos parámetros tienen?
+
+```{r results='hide'}
+
+null<-multinom(Politica ~ 1, data=data_train,trace=F)
+full<-multinom(Politica ~ ., data=data_train,trace=F)
+modeloStepBIC<-step(null, scope=list(lower=null, upper=full), direction="both",
+                    k=log(nrow(data_train)),trace=F)
+modeloStepAIC<-step(null, scope=list(lower=null, upper=full), direction="both",trace=F)
+modeloForwBIC<-step(null, scope=list(lower=null, upper=full), direction="forward",
+                    k=log(nrow(data_train)),trace=F)
+modeloForwAIC<-step(null, scope=list(lower=null, upper=full), direction="forward",trace=F)
+modeloBackBIC<-step(full, scope=list(lower=null, upper=full), direction="backward",
+                    k=log(nrow(data_train)),trace=F)
+modeloBackAIC<-step(full, scope=list(lower=null, upper=full), direction="backward",trace=F)
+```
+```{r}
+modelos<-list(modeloStepBIC,modeloStepAIC,modeloForwBIC,modeloForwAIC,modeloBackBIC,
+              modeloBackAIC)
+map(modelos,function(x) x$call) 
+```
+```{r}
+map_int(modelos,function(x) x$edf) 
+```
+Se generan dos modelos, un modelo de 14 parámetros y otro modelo de 32 parámetros
+
+7. Una vez generados los modelos, se debe determinar cuál es el mejor de todos ellos, para lo cual debes aplicar validación cruzada repetida (utiliza un bucle para simplificar esta tarea). Genera los boxplots para las 3 medidas, así como los resúmenes y compara los modelos. ¿Cuál parece ser el mejor? Recuerda que si varios modelos son parecidos en cuanto a capacidad predictiva se debe escoger el más sencillo (el que tenga menos parámetros).
+
+
+```{r}
+modelos<-list(modeloStepBIC, modeloStepAIC)
+vcrTodosModelos<-list()
+for (i in 1:length(modelos)){
+  set.seed(1712)
+  vcr<-train(formula(modelos[[i]]), data = data_train,
+             method = "multinom",
+             tuneGrid=expand.grid(decay=0), trace=FALSE,
+             trControl = trainControl(method="repeatedcv", number=5, repeats=20,
+                                    summaryFunction=multiClassSummary, classProbs=TRUE)
+)
+  vcrTodosModelos[[i]]<-vcr
+}
+bwplot(resamples(vcrTodosModelos),metric=c("AUC", "Kappa", "Accuracy"),
+       scales = list(x = list(relation = "free")))
+```
+Modelo 2
+
+
+8. Para el mejor modelo obtén la matriz de confusión y sus medidas derivadas en el conjunto de datos de prueba. ¿Qué puedes decir de la calidad del modelo? Explica por qué aparecen varios valores de sensibilidad y especificidad.
+
+```{r}
+cm_test<-confusionMatrix(table(predict(modeloStepAIC,newdata=data_test),data_test$Politica))
+cm_test$table
+cm_test$overall[1:2]
+cm_test$byClass[,1:2]
+```
+
+9. ¿Qué puedes decir sobre la calidad del modelo a partir de la información proporcionada la curva Roc one-vs-all (tanto en entrenamiento como en prueba)? A la vista de los resultados, ¿podría decirse que el modelo funciona igual de bien a la hora de predecir los 3 niveles de la variable?
+```{r}
+aucmulti<-pROC::multiclass.roc(data_train$Politica, predict(modeloStepAIC, data_train, type='probs'))
+pROC::auc(aucmulti)
+```
+```{r}
+input<-data.frame(real=data_train$Politica,predict(modeloStepAIC, data_train, type='probs'))
+count<-0
+salidaAUC<-c()
+for (class in levels(data_train$Politica)){
+  count<-count+1
+  obs  <- ifelse(input[,  "real"] == class, 1, 0)
+  prob <- input[,class]
+  curvaRoc<-roc(obs, prob, direction="<")
+  salidaAUC<-c(salidaAUC,curvaRoc$auc)
+  if (count==1)
+    plot(curvaRoc)
+  else
+    plot(curvaRoc,add=T,col=count)
+}
+legend("bottomright", legend=paste0(levels(data_train$Politica),":",round(salidaAUC,3)),
+       col=1:4, lty=1, cex=0.8)
+```
+```{r}
+mean(salidaAUC)
+```
+
+10. Para finalizar, realiza un análisis de tipo II sobre el modelo, saca las conclusiones oportunas e interpreta los odds-ratio asociados a dos variables (si es posible, una cuantitativa y una cualitativa). Recuerda que si algún parámetro no es significativo la frase correspondiente debe reflejar ese hecho.
+
+```{r}
+Anova(modeloStepAIC, type = "II")
+exp(coef(modeloStepAIC)[,-1])
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
