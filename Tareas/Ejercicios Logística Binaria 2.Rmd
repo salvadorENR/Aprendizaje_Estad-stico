@@ -38,7 +38,7 @@ data_test <- datos[-trainIndex,]
 
 3. Utilizando los datos de la partición de entrenamiento, genera un primer modelo de regresión logística multinomial para la variable dependiente con todas las variables independientes disponibles. ¿Cuántos parámetros lo componen? ¿Cuántos son significativos al 5%?
 ```{r}
-modeloInicial<-multinom(Politica ~ ., data=data_train)
+modeloInicial<-glm(Politica ~ ., data=data_train)
 ```
 ```{r}
 stargazer(modeloInicial, type="text", report=('vc*p'))

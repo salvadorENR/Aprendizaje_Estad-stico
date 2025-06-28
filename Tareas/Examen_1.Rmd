@@ -1,0 +1,121 @@
+---
+title: "Ejercicio Lineal 2"
+author: "Salvador Enrique Rodríguez Hernández"
+date: "22/06/2025"
+---
+
+1.  Carga los datos en el entorno de Rstudio a través de la función readRDS (nota: como estás trabajando con datos “conocidos” no es necesario revisar el tipo de las variables, pues lo hiciste el primer día, pero se debe hacer siempre que el conjunto de datos es nuevo). Formatea la variable dependiente si fuera necesario. Decide si quieres modificar la categoría de referencia o no.
+
+```{r message=FALSE, warning=FALSE}
+library(nnet)
+library(stargazer)
+library(car)
+library(caret)
+library(pROC)
+library(purrr)
+library(furrr)
+library(dplyr)
+# Para paralelizar
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+
+```{r}
+datos<-readRDS("datosDeathPenalty")
+str(datos)
+```
+
+```{r}
+datos$PenaMuerte<-as.factor(make.names(datos$PenaMuerte))
+table(datos$PenaMuerte)/nrow(datos)
+```
+
+2.  Realiza una partición del conjunto de datos en entrenamiento (80%) y prueba (20%).
+
+```{r}
+set.seed(12345)
+trainIndex <- createDataPartition(datos$PenaMuerte, p=0.8, list=FALSE)
+data_train <- datos[trainIndex,]
+data_test <- datos[-trainIndex,]
+```
+
+3.  Utilizando los datos de la partición de entrenamiento, genera un primer modelo de regresión logística multinomial para la variable dependiente con todas las variables independientes disponibles. ¿Cuántos parámetros lo componen? ¿Cuántos son significativos al 5%?
+
+```{r}
+modeloInicial<-modeloInicial<-glm(PenaMuerte ~ ., data=data_train,family=binomial)
+summary(modeloInicial)
+modeloInicial$rank
+```
+
+```{r}
+stargazer(modeloInicial, type="text", report=('vc*p'))
+```
+
+Parámetros significativos:
+
+CondenasPreviasYes\
+SexoMale\
+PartidoPoliticoRepub\
+ReligionOtro RazaBlanca RazaHispana\
+RazaOtra Conf
+
+4.  Aplica el análisis de tipo II sobre el modelo anterior, explica en qué consiste este análisis y de qué sirve. A continuación, analiza los resultados y extrae las conclusiones pertinentes.
+
+```{r}
+Anova(modeloInicial, type = "II")
+```
+
+5 Variables significativas: CondenasPrevias,Sexo, PartidoPolitico,Raza, Conf
+
+6.  Utilizando los datos de la partición de entrenamiento, construye 6 modelos de regresión logística multinomial para la variable dependiente “Politica” aplicando los 3 métodos de selección de variables estudiados y los 2 criterios de selección a partir de la función step. ¿Cuántos modelos diferentes se generan? ¿Cuántos parámetros tienen?
+
+```{r results='hide'}
+
+null<-glm(PenaMuerte ~ 1, data=data_train,family=binomial,trace=F)
+full<-glm(PenaMuerte ~ ., data=data_train,family=binomial,trace=F)
+modeloStepBIC<-step(null, scope=list(lower=null, upper=full), direction="both",
+                    k=log(nrow(data_train)),trace=F)
+modeloStepAIC<-step(null, scope=list(lower=null, upper=full), direction="both",trace=F)
+modeloForwBIC<-step(null, scope=list(lower=null, upper=full), direction="forward",
+                    k=log(nrow(data_train)),trace=F)
+modeloForwAIC<-step(null, scope=list(lower=null, upper=full), direction="forward",trace=F)
+modeloBackBIC<-step(full, scope=list(lower=null, upper=full), direction="backward",
+                    k=log(nrow(data_train)),trace=F)
+modeloBackAIC<-step(full, scope=list(lower=null, upper=full), direction="backward",trace=F)
+```
+
+```{r}
+modelos<-list(modeloStepBIC,modeloStepAIC,modeloForwBIC,modeloForwAIC,modeloBackBIC,
+              modeloBackAIC)
+map(modelos,function(x) x$call) 
+```
+
+```{r}
+map_int(modelos,function(x) x$edf) 
+```
+
+```{r}
+modelo2<-glm(PenaMuerte ~ CondenasPreviasYes+SexoMale+PartidoPoliticoRepub+ReligionOtro+RazaBlanca+Raz+Hispana+RazaOtra+Conf , data=data_train,family=binomial)
+summary(modelo2)
+modelo2$rank
+```
+
+7.  Una vez generados los modelos, se debe determinar cuál es el mejor de todos ellos, para lo cual debes aplicar validación cruzada repetida (utiliza un bucle para simplificar esta tarea). Genera los boxplots para las 3 medidas, así como los resúmenes y compara los modelos. ¿Cuál parece ser el mejor? Recuerda que si varios modelos son parecidos en cuanto a capacidad predictiva se debe escoger el más sencillo (el que tenga menos parámetros).
+
+```{r}
+modelos<-list(modeloInicial,modeloStepBIC, modeloStepAIC)
+vcrTodosModelos<-list()
+for (i in 1:length(modelos)){
+  set.seed(1712)
+  vcr<-train(formula(modelos[[i]]), data = data_train,
+             method = "multinom",
+             tuneGrid=expand.grid(decay=0), trace=FALSE,
+             trControl = trainControl(method="repeatedcv", number=5, repeats=20,
+                                    summaryFunction=multiClassSummary, classProbs=TRUE)
+)
+  vcrTodosModelos[[i]]<-vcr
+}
+bwplot(resamples(vcrTodosModelos),metric=c("AUC", "Kappa", "Accuracy"),
+       scales = list(x = list(relation = "free")))
+```

@@ -1,0 +1,135 @@
+---
+title: "Ejercicio Lineal 1"
+author: "Salvador Enrique Rodríguez Hernández"
+date: "22/06/2025"
+---
+
+
+1. Carga los datos en el entorno de Rstudio a través de la función readRDS. Utilizando el código que consideres (y los datos disponibles), indica qué precio estimarías que tiene una vivienda. A continuación, obtén el histograma de la variable dependiente y comenta el gráfico.
+```{r message=FALSE,warning=FALSE}
+library(car)
+library(purrr)
+library(furrr)
+library(dplyr)
+library(ggplot2)
+library(glmnet)
+library(caret)
+# Para paralelizar
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+datos<-readRDS("VentaViviendas")
+str(datos)
+```
+```{r}
+summary(datos)
+```
+```{r}
+hist(datos$price)
+```
+
+Según el resumen estadístico, el precio promedio de una vivienda es de \$544,129, mientras que el valor mediano es de \$451,000. Estos valores permiten tener una idea general del costo típico de una vivienda en el conjunto de datos. Por tanto, si se desea hacer una estimación razonable del precio de una vivienda promedio, se podría proponer un precio cercano al valor mediano (por ser más robusto frente a valores extremos), es decir, aproximadamente $451,000.
+
+El histograma de price muestra una distribución asimétrica positiva, con la mayoría de los precios concentrados en los rangos más bajos (entre \$100,000 y \$800,000) y una larga cola hacia la derecha, lo que indica la presencia de algunas viviendas con precios muy altos que funcionan como valores atípicos (outliers). Esto justifica que el valor medio (\$544,129) sea mayor que la mediana (\$451,000), y refuerza la elección de la mediana como mejor estimador del precio típico.
+
+2. Haz un summary de los datos para entender bien qué significan y verificar que las variables no tengan errores. Haz un perfil de las viviendas basándote en los estadísticos observados (qué precio suelen tener, tamaño, jardín, etc.).
+```{r}
+summary(datos)
+```
+La vivienda promedio en el conjunto de datos presenta un precio estimado de \$544,129, aunque los precios oscilan entre \$86,500 y más de \$7 millones, lo cual indica una distribución sesgada hacia valores altos, probablemente por la presencia de propiedades de lujo. En términos de características físicas, estas viviendas tienen en promedio 2.14 baños (entendidos como aseos), y una superficie interior de aproximadamente 193 m². El jardín es pequeño, con un área media de apenas 0.12 hectáreas, y el número de plantas es cercano a 1.5, lo que sugiere que la mayoría de las viviendas son de uno o dos niveles.
+
+Respecto a elementos del entorno y estado, solo una pequeña proporción ha sido reformada (216 casos reformados frente a más de 3,800 sin reformar), lo que indica que la renovación no es una práctica común en este conjunto. La antigüedad media de las viviendas es de 49.9 años, por lo que se trata, en general, de construcciones relativamente antiguas. El 10.8% de las viviendas cuenta con una vista (491 de 5000), lo que puede contribuir significativamente al valor de algunas propiedades.
+
+3. Realiza una partición Entrenamiento-Prueba (80-20) de los datos.
+```{r}
+set.seed(12345)
+trainIndex <- createDataPartition(datos$price, p=0.8, list=FALSE)
+data_train <- datos[trainIndex,]
+data_test <- datos[-trainIndex,]
+```
+
+4. Construye un primer modelo de regresión lineal para la variable Price, en el que incluya todas las variables input disponibles. ¿Cuántos parámetros tiene? Evalúa la calidad del modelo resultante (indicando si hay sobreajuste o no) y verifica si se cumple la hipótesis de homocedasticidad.
+
+```{r}
+modeloInicial<-lm(price~., data=data_train)
+modeloInicial$rank
+summary(modeloInicial)
+R2(predict(modeloInicial,data_train), data_train$price)
+R2(predict(modeloInicial,data_test), data_test$price)
+```
+```{r}
+plot(sample(modeloInicial$residuals))
+```
+
+El modelo incluye 11 predictores y un intercepto, por lo tanto, el número total de parámetros estimados es 12.
+
+Los resultados indican un buen nivel de ajuste:
+
+$R^{2}_{Entrenamiento}$ = 0.6278
+$R^{2}_{Prueba}$ =0.6229
+
+La inspección visual del gráfico de residuos (gráfico de dispersión de los residuos respecto al índice de observación) muestra una nube de puntos homogénea y sin patrones visibles, lo cual respalda el supuesto de homocedasticidad (varianza constante de los errores). No se detectan signos evidentes de heterocedasticidad.
+
+En resumen, el modelo inicial presenta un ajuste razonablemente bueno, es estable ya que los $R^2$ son muy similares entre las particiones de entrenamiento y prueba, y cumple con los supuestos básicos de la regresión lineal.
+
+5. Aplica el análisis de tipo II sobre el modelo anterior, explica en qué consiste este análisis y de qué sirve. A continuación, analiza los resultados y extrae las conclusiones pertinentes.
+
+```{r}
+Anova(modeloInicial, type = "II")
+```
+El análisis de tipo II es una técnica utilizada para evaluar la significancia estadística de cada variable explicativa en un modelo de regresión lineal, considerando el efecto conjunto de todas las demás variables. A diferencia del análisis tipo I (secuencial), este enfoque estima el efecto de cada variable como si fuera la última en entrar al modelo, lo que proporciona una evaluación más equitativa en presencia de colinealidad. Su utilidad principal radica en identificar las variables que realmente contribuyen a explicar la variabilidad de la variable dependiente, ajustando por el resto de las variables incluidas en el modelo.
+
+Del análisis se concluye que las variables superf, floors, view, condition, renovated, lat, long y antig resultan estadísticamente significativas al nivel del 5%, ya que sus valores p son menores a 0.05. Estas variables aportan de manera significativa a la explicación del precio de la vivienda, incluso después de haber ajustado por el resto de variables en el modelo.
+
+Por otro lado, las variables bathrooms y garden no resultan significativas bajo este criterio, lo que indica que, una vez controlado por el resto de variables, su efecto sobre el precio no es estadísticamente distinto de cero.
+
+Este análisis permite refinar el modelo, identificar las variables más relevantes y potencialmente proponer una simplificación del mismo sin perder capacidad explicativa. Además, confirma la importancia de incluir indicadores físicos (como superf, floors, view, renovated) y de localización (lat, long) en la predicción del valor de una vivienda.
+
+6. Construye un nuevo modelo (que llamaremos modelo2) que contenga únicamente las 3 variables más importantes (usa la información del ejercicio anterior para saber cuáles son). ¿Cuántos parámetros tiene? ¿Este nuevo modelo tiene todos sus parámetros significativos?
+```{r}
+modelo2 <- lm(price ~ superf + view + lat, data = data_train)
+modelo2$rank
+summary(modelo2)
+```
+Este nuevo modelo tiene cuatro parámetros, incluyendo el intercepto. Los resultados del resumen del modelo muestran que todos los coeficientes son estadísticamente significativos (valores p menores a 0.001), lo cual indica que estas tres variables aportan información relevante para predecir el precio de las viviendas.
+
+Desde el punto de vista de calidad del ajuste, el coeficiente de determinación ajustado es aproximadamente 0.608, lo que representa una capacidad explicativa considerable tomando en cuenta que el modelo solo incluye tres predictores. Esto sugiere que el modelo es parsimonioso y eficaz, ya que logra un buen rendimiento predictivo sin necesidad de un gran número de variables. Además, al mantener únicamente las variables más influyentes, se reduce el riesgo de sobreajuste, se mejora la interpretabilidad y se conserva la significancia estadística de todos los parámetros incluidos.
+
+7. ¿Todas las variables del modelo son significativas ahora? ¿El orden de importancia de las mismas se ha visto alterado? De ser así, explica a qué se debe el cambio.
+```{r}
+Anova(modelo2, type = "II")
+```
+En el modelo reducido (modelo2), que incluye únicamente las variables superf, view y lat, todas las variables resultan estadísticamente significativas según el análisis de varianza tipo II, con valores de p extremadamente bajos (p < 2.2e-16). Esto indica que cada una de estas variables aporta información relevante para explicar el precio de las viviendas.
+
+Además, el orden de importancia de las variables no se ha visto alterado con respecto al modelo completo. En ambos casos, superf (superficie) es la variable con mayor influencia, seguida por lat (latitud) y luego view (vistas). Esto sugiere que estas tres variables son consistentemente las más relevantes del conjunto original, y su impacto no depende de la presencia de otras covariables. Por tanto, el modelo reducido mantiene la estructura de importancia relativa observada inicialmente, pero con una formulación más parsimoniosa y centrada en los predictores más influyentes.
+
+8. ¿Ha sido correcta la eliminación de variables llevada a cabo? De no ser así, construye un tercer modelo incluyendo alguna variable de las descartadas.
+
+Considerando como criterio principal la suma de cuadrados explicada (Sum Sq), las tres variables seleccionadas en el modelo reducido (superf, view y lat) resultan ser las de mayor aporte explicativo dentro del análisis de varianza tipo II aplicado al modelo completo. Estas variables concentran la mayor parte de la variabilidad explicada sobre el precio de las viviendas, mientras que otras variables como garden, bathrooms o floors muestran sumas de cuadrados menores, lo que indica un aporte marginal.
+
+Además, al comparar los valores de $R^2$ entre el modelo completo y el modelo reducido, se observa que el modelo inicial presenta un $R^2$≈0.63 mientras que el modelo reducido mantiene un valor cercano de $R^2$≈0.61. Esta diferencia mínima sugiere que la capacidad explicativa global del modelo se conserva en gran medida, pese a haber eliminado varias variables.
+
+Por lo tanto, puede afirmarse que la eliminación de variables ha sido adecuada y justificada, no solo por su baja significancia y menor aporte explicativo, sino también porque no se ha sacrificado significativamente la calidad del ajuste. Así, se obtiene un modelo más parsimonioso, eficiente y fácil de interpretar, sin perder precisión de forma sustancial.
+
+9. Para el último modelo generado, interpreta el parámetro de tres variables (si es posible, la más importante de cada tipo: cuantitativa, binaria y otra cualitativa con más niveles).
+
+Variable cuantitativa (superf): Su coeficiente estimado es aproximadamente 
+\$2887, lo que indica que, manteniendo constantes las demás variables, por cada metro cuadrado adicional en la superficie interior de la vivienda, el precio aumenta en promedio 
+\$2887. Este valor tiene un alto nivel de significancia (valor-p < 0.001), lo que respalda su fuerte influencia sobre el precio.
+
+Variable binaria (view1): Esta variable indica si la vivienda tiene buena vista (1: sí, 0: no). Su coeficiente estimado es \$224650, por lo tanto, una vivienda con buena vista cuesta en promedio \$224,650 más que una que no la tiene, manteniendo constantes las demás variables. Este efecto también es estadísticamente significativo.
+
+Variable geográfica (lat): El coeficiente estimado para la latitud es \$691700, lo cual implica que, en promedio, por cada grado de incremento hacia el norte, el precio de la vivienda aumenta en \$691,700, manteniendo el resto de factores constantes. Dado que la latitud es continua, este efecto refleja cómo la ubicación geográfica (más al norte) incide significativamente en el valor de las propiedades en el área analizada.
+
+10. Obtén el $R^2$ en entrenamiento y prueba y comenta la calidad del modelo, así como su
+estabilidad.
+```{r}
+R2(predict(modelo2,data_train), data_train$price)
+R2(predict(modelo2,data_test), data_test$price)
+```
+```{r}
+plot(sample(modelo2$residuals))
+```
+El modelo 2 presenta un coeficiente de determinación $R^2$ de aproximadamente 0.608 en la partición de entrenamiento y 0.613 en la partición de prueba. Estos valores indican que el modelo logra explicar cerca del 61\% de la variabilidad del precio de las viviendas, lo cual es un desempeño razonable, aunque no excelente. La similitud entre los valores de $R^2$ en ambos conjuntos sugiere que el modelo tiene una buena estabilidad y no presenta indicios de sobreajuste.
+
+Adicionalmente, al observar la gráfica de residuos, se aprecia una dispersión relativamente constante de los errores a lo largo de los valores predichos, sin un patrón sistemático evidente. Esto respalda la validez del supuesto de homocedasticidad y confirma que el modelo mantiene una varianza constante de los errores. En conjunto, estos resultados permiten concluir que el modelo 2 es estable y cumple con los supuestos básicos requeridos para un modelo de regresión lineal.
