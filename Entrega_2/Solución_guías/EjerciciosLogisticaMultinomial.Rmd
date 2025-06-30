@@ -1,7 +1,7 @@
 ---
 title: "logística multinomial"
 author: "Salvador Enrique Rodríguez Hernández"
-date: "xx/06/2025"
+date: "30/06/2025"
 ---
 
 1. Carga los datos en el entorno de Rstudio a través de la función readRDS (nota: como estás trabajando con datos “conocidos” no es necesario revisar el tipo de las variables, pues lo hiciste el primer día, pero se debe hacer siempre que el conjunto de datos es nuevo). Formatea la variable dependiente si fuera necesario. Decide si quieres modificar la categoría de referencia o no.

@@ -1,0 +1,158 @@
+---
+title: "KNN"
+author: "Salvador Enrique Rodríguez Hernández"
+date: "28/06/2025"
+output: pdf_document
+---
+1. Carga los datos en el entorno de Rstudio a través de la función readRDS. Utilizando el código que consideres (y los datos disponibles), indica qué precio estimarías que tiene una vivienda.
+
+```{r message=FALSE,warning=FALSE}
+library(caret)
+library(pROC)
+library(kknn)
+library(iml)
+# Dado que la validación cruzada puede aprovechar los beneficios de la
+# paralelización, lo ponemos (si da problemas en tu ordenador, puedes obviarlo)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+```{r}
+datosRegr<-readRDS("VentaViviendas")
+summary(datosRegr)
+```
+
+
+2. Realiza una partición del conjunto de datos en entrenamiento (80%) y prueba (20%).
+```{r}
+set.seed(12345)
+trainIndex <- createDataPartition(datosRegr$price, p=0.8, list=FALSE)
+data_rg_train <- datosRegr[trainIndex,]
+data_rg_test <- datosRegr[-trainIndex,]
+```
+
+3. Genera un primer modelo KNN para la variable price con un k igual a 5 y la distancia de Manhattan. Imprime las matrices D y CL, explica qué contienen y relaciónalo con el funcionamiento del modelo KNN. Así mismo, calcula el R2 prueba.
+```{r}
+modelo1 <- kknn(price~., data_rg_train, data_rg_test, distance = 1, k=5, kernel = "rectangular")
+head(modelo1$D)
+```
+```{r}
+head(modelo1$CL)
+```
+```{r}
+R2(modelo1$fitted.values,data_rg_test$price)
+```
+La matriz D contiene las distancias entre cada observación del conjunto de prueba y sus 5 vecinos más cercanos en el conjunto de entrenamiento, calculadas con distancia Manhattan. Cada fila representa una observación de test, y cada columna una distancia a uno de sus vecinos.
+La matriz CL contiene los valores reales de price de esos 5 vecinos más cercanos. Son los precios usados para calcular la predicción del precio de cada observación de test mediante promedio simple.
+Relación con KNN: el modelo predice el precio de una vivienda como el promedio de los precios de las viviendas más parecidas (según la distancia Manhattan). La matriz D identifica cuán "parecidas" son, y la matriz CL muestra los precios de esas comparables.
+
+4. Utilizando validación cruzada, haz un análisis preliminar del k y tipo de distancia óptimo. Comenta los resultados y determina la “mejor” combinación, justificando porqué consideras que es la mejor.
+```{r}
+set.seed(12345)
+# En la posición 1 está la variable objetivo
+knn_tuneTodo <- train(y=data_rg_train$price, x = data_rg_train[,-1],
+                  method = "kknn",
+                  trControl = trainControl(method="cv", number = 5),
+                  metric="Rsquared",
+                  tuneGrid = expand.grid(kmax=floor(seq.int(2,sqrt(nrow(data_rg_train)),length.out=10)), distance=c(1,2), kernel = "rectangular"))
+knn_tuneTodo
+```
+```{r}
+plot(knn_tuneTodo,metric=c("Rsquared"))
+```
+Según los resultados de knn_tuneTodo, el mejor desempeño se logra con:
+kmax = 49 vecinos
+distance = 1 (Manhattan)
+Rsquared = 0.6983776 (mayor valor observado)
+Conclusión: Aunque varios valores de k presentan desempeños similares, se opta por k = 49 y distancia Manhattan, ya que ofrece el mayor $R^2$ sin necesidad de más complejidad (otros valores iguales comparten el mismo $R^2$ pero no lo superan).
+
+5. Utilizando esa combinación óptima, lleva a cabo una selección de variables. De nuevo, comenta los resultados y concluye cuál es el conjunto óptimo de variables input.
+
+```{r}
+# El 1 es la posición en la que se ubica la variable IMC
+salida<-filterVarImp(x = data_rg_train[,-1], y = data_rg_train$price, nonpara = TRUE)
+ranking<-sort(apply(salida, 1, mean), decreasing =T)
+
+# Para ajustar el margen inferior del gráfico y que así quepan los nombres
+par(mar=c(8.1, 4.1, 4.1, 2.1))
+barplot(ranking, las=2)
+```
+```{r}
+# Vuelvo a poner los márgenes por defecto
+par(mar=c(5.1, 4.1, 4.1, 2.1))
+```
+```{r}
+vcrTodosModelos<-list()
+for (i in 1:(length(ranking)-1)){
+set.seed(12345)
+vcrTodosModelos[[i]] <- train(y=data_rg_train$price, x = data_rg_train[,names(ranking)[1:(i+1)]],
+                  method = "kknn",
+                  trControl = trainControl(method="cv", number = 8),
+                  metric="Rsquared",
+                  tuneGrid = expand.grid(kmax=6, distance=1, kernel = "rectangular"))
+}
+bwplot(resamples(vcrTodosModelos),metric=c("Rsquared"))
+```
+```{r}
+summary(resamples(vcrTodosModelos),metric=c("Rsquared"))
+```
+Se evaluaron modelos con un número creciente de variables (según su importancia). El mejor modelo fue Model9, con:
+* $R^2_{medio}$ ≈ 0.704
+* menor dispersión entre los resultados.
+En conclusión, la combinación óptima incluye las 10 variables, que según la gráfica de barras serían (en orden aproximado): superf, bathrooms, lat, view, floors, renovated, garden, condition, antig, long.
+
+6. Para la combinación óptima de variables, busca el valor óptimo de k (cerrando el conjunto de valores teniendo en cuenta los resultados del apartado 4) y del tipo de distancia. Comenta los resultados e indica el resultado.
+```{r}
+set.seed(12345)
+knn_finetune <- train(y=data_rg_train$price, x = data_rg_train[,names(ranking)[1:(9+1)]],
+                  method = "kknn",
+                  trControl = trainControl(method="repeatedcv", number = 5, repeats=10),
+                  tuneGrid = expand.grid(kmax=floor(seq.int(2,10,length.out=10)), distance=c(1,2), kernel = "rectangular"))
+knn_finetune
+```
+```{r}
+plot(knn_finetune,metric=c("Rsquared"))
+```
+Se usó validación cruzada repetida (5 folds, 10 repeticiones). Se compararon valores de k de 2 a 10. El mejor resultado fue con k = 6, distance = 1 (Manhattan), $R^2$ = 0.6869754, el más alto obtenido.En conclusión, se selecciona k = 6 y distancia Manhattan como combinación óptima para la etapa final.
+
+7. Construye el mejor modelo y calcula el R2 prueba. Usando la información de la validación cruzada anterior, comenta si se trata de un modelo estable.
+```{r}
+modeloFinal <- kknn(price~., data_rg_train, data_rg_test, distance = 1, k=6, kernel = "rectangular")
+R2(modeloFinal$fitted.values,data_rg_test$price)
+```
+```{r}
+boxplot(knn_finetune$resample$Rsquared)
+```
+El Modelo final entrenado con 10 variables, k = 6 y distance = 1 tiene los siguientes resultados:
+$R^2$ = 0.7354 que es superior al de la validación cruzada (0.6864969). buena generalización.
+El boxplot de $R^2$ muestra poca dispersión, con valores concentrados entre 0.68 y 0.70 aprox.
+En conclusión, el modelo es estable y generaliza bien.
+
+8. Obtén el PDP para dos variables (una cuantitativa y una cualitativa), juntas y por separado. Comenta los resultados.
+```{r}
+predictor <- Predictor$new(knn_finetune, data = data_rg_train, y = data_rg_train$price)
+pdp <- FeatureEffect$new(predictor, feature = "superf", method="pdp")
+pdp$plot()
+```
+```{r}
+pdp2 <- FeatureEffect$new(predictor, feature = "view", method="pdp")
+pdp2$plot()
+```
+```{r}
+pdp3 <- FeatureEffect$new(predictor, feature = c("superf","view"), method="pdp")
+pdp3$plot()
+```
+
+(1) superf (cuantitativa):
+La gráfica de superf muestra que a mayor superficie, mayor es el precio estimado. La relación es aproximadamente creciente y continua, como se espera.
+
+(2) view (cualitativa binaria: 0 o 1):
+Las viviendas con view = 1 (buena vista) tienen precios esperados más altos. Diferencia clara entre ambas categorías.
+
+(3) superf + view (PDP conjunto):
+La pendiente de superf cambia según el valor de view. Para viviendas con buena vista (view = 1), el aumento en superf tiene un impacto mayor en el precio. Esto sugiere una interacción entre ambas variables.
+
+En conclusión, ambas variables son relevantes y tienen efectos esperados. Además, su interacción mejora la interpretación del modelo.
+
+
+
